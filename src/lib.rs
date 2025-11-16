@@ -10,7 +10,10 @@ pub struct PingResult {
     pub status: PingStatus,
     pub block_number: Option<String>,
     pub error_message: Option<String>,
-
+    pub min_latency_ms: Option<u128>,
+    pub max_latency_ms: Option<u128>,
+    pub ping_count: usize,
+    pub success_rate: f32,
 }
 
 /// Whether the ping was successful or what type of failure occurred
@@ -18,10 +21,10 @@ pub struct PingResult {
 /// Categorizes the outcome of a ping attempt for quick status checking  
 pub enum PingStatus {
     Success,
+    PartialSuccess,
     HttpError,
     JsonRpcError,
     Timeout,
-    // We can add more variants as needed
 }    
 
 #[derive(Debug, Serialize)]
@@ -100,6 +103,10 @@ pub async fn ping_endpoint(url: &str) -> PingResult {
                             status: PingStatus::JsonRpcError,
                             block_number: None,
                             error_message: Some(format!("JSON-RPC error: {} (code: {})", error.message, error.code)),
+                            min_latency_ms: None,
+                            max_latency_ms: None,
+                            ping_count: 1,
+                            success_rate: 0.0,
                         }
                     } else {
                         // Success case - we have a block number!
@@ -109,6 +116,10 @@ pub async fn ping_endpoint(url: &str) -> PingResult {
                             status: PingStatus::Success,
                             block_number: json_response.result,
                             error_message: None,
+                            min_latency_ms: None,
+                            max_latency_ms: None,
+                            ping_count: 1,
+                            success_rate: 1.0,
                         }
                     }
                 }
@@ -120,6 +131,10 @@ pub async fn ping_endpoint(url: &str) -> PingResult {
                         status: PingStatus::HttpError,
                         block_number: None,
                         error_message: Some(format!("Failed to parse response: {}", e)),
+                        min_latency_ms: None,
+                        max_latency_ms: None,
+                        ping_count: 1,
+                        success_rate: 0.0,
                     }
                 }
             }
@@ -132,7 +147,74 @@ pub async fn ping_endpoint(url: &str) -> PingResult {
                 status: PingStatus::HttpError,
                 block_number: None,
                 error_message: Some(format!("HTTP request failed: {}", e)),
+                min_latency_ms: None,
+                max_latency_ms: None,
+                ping_count: 1,
+                success_rate: 0.0,
             }
         }
+    }
+}
+
+/// Pings an endpoint multiple times and returns aggregated statistics
+pub async fn ping_endpoint_multiple(url: &str, count: usize) -> PingResult {
+    let mut latencies = Vec::new();
+    let mut http_successes = 0;
+    let mut rpc_successes = 0;
+    let mut last_block_number = None;
+    let mut last_error_message = None;
+
+    for _ in 0..count {
+        let single_result = ping_endpoint(url).await;
+
+        // Count HTTP successes and collect latency if we got a measurement
+        if let Some(latency) = single_result.latency_ms {
+        http_successes += 1;
+        latencies.push(latency);
+        }
+        
+        // Count RPC successes and track last good block
+        match single_result.status {
+            PingStatus::Success => {
+                rpc_successes += 1;
+                last_block_number = single_result.block_number;
+                last_error_message = None;
+        } 
+            _ => { // Any failure case
+                last_error_message = single_result.error_message;
+            }
+        }
+    }
+
+    let avg_latency = if !latencies.is_empty() {
+        Some(latencies.iter().sum::<u128>() / latencies.len() as u128)
+    } else {
+        None
+    };
+    
+    let min_latency = latencies.iter().min().copied();
+    let max_latency = latencies.iter().max().copied();
+
+     // Determine overall status
+    let status = if rpc_successes == count {
+        PingStatus::Success
+    } else if rpc_successes > 0 {
+        PingStatus::PartialSuccess
+    } else if http_successes == 0 {
+        PingStatus::HttpError
+    } else {
+        PingStatus::JsonRpcError
+    };
+
+    PingResult {
+        endpoint: url.to_string(),
+        latency_ms: avg_latency,
+        status,
+        block_number: last_block_number,
+        error_message: last_error_message,
+        min_latency_ms: min_latency,
+        max_latency_ms: max_latency,
+        ping_count: count,
+        success_rate: if count > 0 { rpc_successes as f32 / count as f32 } else { 0.0 },
     }
 }
