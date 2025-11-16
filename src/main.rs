@@ -94,6 +94,9 @@ fn output_table(results: &[chain_ping::PingResult]) {
 }
 
 fn output_json(results: &[chain_ping::PingResult]) {
-    // TODO: Implement JSON output
-    println!("JSON output not yet implemented");
+    if let Ok(json_string) = serde_json::to_string_pretty(results) {
+        println!("{}", json_string);
+    } else {
+        eprintln!("Error: Failed to serialize results to JSON");
+    }
 }

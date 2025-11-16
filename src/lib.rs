@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 /// Complete snapshot of a single ping attempt, containing all relevant metrics and metadata
 pub struct PingResult {
     pub endpoint: String,
@@ -17,7 +17,7 @@ pub struct PingResult {
 }
 
 /// Whether the ping was successful or what type of failure occurred
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 /// Categorizes the outcome of a ping attempt for quick status checking  
 pub enum PingStatus {
     Success,
@@ -172,7 +172,7 @@ pub async fn ping_endpoint_multiple(url: &str, count: usize) -> PingResult {
         http_successes += 1;
         latencies.push(latency);
         }
-        
+
         // Count RPC successes and track last good block
         match single_result.status {
             PingStatus::Success => {
