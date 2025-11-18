@@ -1,11 +1,8 @@
 
-// use assert_cmd::output;
 use clap::Parser;
-use chain_ping::{ping_endpoint_multiple, PingStatus};
+use chain_ping::{ping_endpoint_multiple, PingStatus, PingResult};
 use futures::future::join_all;
-use comfy_table::Table;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+use comfy_table::{Table, presets::UTF8_FULL, modifiers::UTF8_ROUND_CORNERS};
 
 /// This struct defines our CLI arguments using clap's derive feature
 #[derive(Parser)]
@@ -14,9 +11,13 @@ struct Cli {
     /// Ethereum RPC endpoint URLs (one or more)
     endpoints: Vec<String>,
 
-    /// Number of pints to perform per endpoint (default: 1)
-    # [arg(short, long, default_value = "1")]
+    /// Number of pints to perform per endpoint (default: 4)
+    # [arg(short, long, default_value = "4")]
     pings: usize,
+
+    /// Request timeout in seconds (default: 10)
+    #[arg(short, long, default_value = "10")]
+    timeout: u64,
 
     /// Output format: table or json (default: table)
     #[arg(short, long, default_value = "table")]
@@ -30,18 +31,24 @@ async fn main() {
     let cli = Cli::parse();
     
     if cli.endpoints.is_empty() {
-        eprintln!("Error: At least one endpoint is required");
+        eprintln!("Error: At least one endpoint URL is required");
         return;
     }
+
+    let endpoint_str = if cli.endpoints.len() == 1 { "endpoint" } else { "endpoints" };
+    let ping_str = if cli.pings == 1 { "request" } else { "requests" };
     
-    println!("Pinging {} endpoints {} times each...", cli.endpoints.len(), cli.pings);
+    eprintln!("Pinging {} {} ({} {} each)...", cli.endpoints.len(), endpoint_str, cli.pings, ping_str);
 
     let ping_futures: Vec<_> = cli.endpoints
         .iter()
-        .map(|endpoint| ping_endpoint_multiple(endpoint, cli.pings))
+        .map(|endpoint| ping_endpoint_multiple(endpoint, cli.pings,cli.timeout))
         .collect();
+    
+    let mut results = join_all(ping_futures).await;
 
-    let results = join_all(ping_futures).await;
+    // Sort results by average latency, fastest first. Failures go to the bottom.
+    results.sort_by_key(|r| r.avg_latency_ms.unwrap_or(u128::MAX));
 
     match cli.format.as_str() {
     "json" => output_json(&results),
@@ -50,44 +57,70 @@ async fn main() {
     }
 }
 
-fn output_table(results: &[chain_ping::PingResult]) {
+fn output_table(results: &[PingResult]) {
     let mut table = Table::new();
+
     table
         .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_header(vec!["Endpoint", "Status", "Avg (ms)", "Min/Max (ms)", "Success", "Block"]);
+        .apply_modifier(UTF8_ROUND_CORNERS);
+
+    let multiple_pings = results.get(0).map_or(false, |r| r.ping_count > 1);
+
+    if multiple_pings {
+        // Mode A: Multiple Pings. We show "Avg Latency", "Min", and "Max".
+        table.set_header(vec!["Endpoint", "Status", "Avg Latency", "Min", "Max", "Success", "Block Number", "Last Error"]);
+    } else {
+        // Mode B: Single Ping. We show "Latency" and REMOVE "Min", "Max", and "Success" (Success count)
+        table.set_header(vec!["Endpoint", "Status", "Latency", "Block Number", "Last Error"]);
+    }
+
     for result in results {
-        let endpoint = &result.endpoint;
-        
-        // Convert PingStatus enum to human-readable string
+        let latency_value = result.avg_latency_ms.map(|ms| format!("{}ms", ms)).unwrap_or_else(|| "-".to_string());       
+        let success_count = format!("{}/{}", result.success_count, result.ping_count);
+        let block = result.block_number.as_deref().unwrap_or("-");
+        let error = result.error_message.as_deref().unwrap_or("-");        
+        let endpoint_display = if result.endpoint.len() > 50 {
+            format!("{}...", &result.endpoint[..47])
+        } else {
+            result.endpoint.clone()
+        };
         let status = match result.status {
             PingStatus::Success => "SUCCESS",
-            PingStatus::PartialSuccess => "PARTIAL",
-            PingStatus::HttpError => "HTTP_ERROR",
-            PingStatus::JsonRpcError => "JSON_RPC_ERROR",
-            PingStatus::Timeout => "TIMEOUT",
+            PingStatus::PartialSuccess => "PARTIAL SUCCESS",
+            PingStatus::Failure => "FAILURE",
         };
-        let latency = if let Some(avg) = result.latency_ms {
-            format!("{}", avg) 
+        let error_display = if error.len() > 40 {
+            format!("{}...", &error[..37])
         } else {
-            "-".to_string()
+            error.to_string()
         };
-        
-        // Calculate success count from success rate
-        let success_rate = format!("{}/{}", (result.success_rate * result.ping_count as f32) as usize, result.ping_count);
-        
-        // Handle optional block number
-        let block = result.block_number.as_deref().unwrap_or("-");
 
-        // Add a row to the table
-        table.add_row(vec![
-            endpoint,
-            status,
-            &latency,
-            &format!("{}/{}", result.min_latency_ms.unwrap_or(0), result.max_latency_ms.unwrap_or(0)),
-            &success_rate,
-            block,
-        ]);
+        // Add rows based on whether we are in multiple pings mode or not
+        if multiple_pings {
+            // Multiple pings mode: Show Avg, Min, Max
+            let min_latency = result.min_latency_ms.map(|ms| format!("{}ms", ms)).unwrap_or_else(|| "-".to_string());
+            let max_latency = result.max_latency_ms.map(|ms| format!("{}ms", ms)).unwrap_or_else(|| "-".to_string());
+            
+            table.add_row(vec![
+                &endpoint_display, 
+                status,
+                &latency_value,
+                &min_latency,
+                &max_latency,
+                &success_count,
+                block,
+                &error_display
+            ]);
+        } else {
+            // Single ping mode: No Min, Max, and Success. And display Latency (instead if Avg Latency)
+            table.add_row(vec![
+                &endpoint_display,
+                status, 
+                &latency_value, 
+                block,
+                &error_display
+            ]);
+        }
     }
 
     println!("{table}");

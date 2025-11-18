@@ -1,220 +1,157 @@
 
-use serde::{Deserialize, Serialize};
+// --- IMPORTS ---
+
+use serde::Serialize;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
+
+// --- DATA STRUCTURES ---
 #[derive(Debug, Serialize)]
-/// Complete snapshot of a single ping attempt, containing all relevant metrics and metadata
+/// The final, aggregated result of pinging an endpoint multiple times
 pub struct PingResult {
     pub endpoint: String,
-    pub latency_ms: Option<u128>,
-    pub status: PingStatus,
-    pub block_number: Option<String>,
-    pub error_message: Option<String>,
+    pub avg_latency_ms: Option<u128>,
     pub min_latency_ms: Option<u128>,
     pub max_latency_ms: Option<u128>,
+    pub block_number: Option<String>,
     pub ping_count: usize,
-    pub success_rate: f32,
+    pub success_count: usize,
+    pub status: PingStatus,
+    pub error_message: Option<String>,
 }
 
-/// Whether the ping was successful or what type of failure occurred
-#[derive(Debug, Serialize)]
-/// Categorizes the outcome of a ping attempt for quick status checking  
+/// A simple summary of the outcome
+#[derive(Debug, Serialize, PartialEq)]
 pub enum PingStatus {
     Success,
     PartialSuccess,
-    HttpError,
-    JsonRpcError,
-    Timeout,
-}    
-
-#[derive(Debug, Serialize)]
-/// Standard JSON-RPC 2.0 request structure for Ethereum API calls
-pub struct JsonRpcRequest {
-    pub jsonrpc: String,
-    pub method: String,
-    pub params: Vec<String>,
-    pub id: u32,
-}
-
-#[derive(Debug, Deserialize)]
-/// Standard JSON-RPC 2.0 response structure, handling both success and error cases
-pub struct JsonRpcResponse {
-    pub jsonrpc: String,
-    pub result: Option<String>,
-    pub error: Option<JsonRpcError>,
-    pub id: u32,
-}
-
-#[derive(Debug, Deserialize)]
-/// Error payload within a JSON-RPC response according to JSON-RPC 2.0 spec
-pub struct JsonRpcError {
-    pub code: i32,
-    pub message: String,
-}
+    Failure,
+} 
 
 #[derive(Debug, Error)]
-/// Represents all possible error conditions that can occur during RPC pinging
-pub enum ChainPingError {
-    #[error("HTTP request failed: {0}")]
-    ReqwestError(#[from] reqwest::Error),
-    #[error("JSON-RPC error: {message} (code: {code})")]
-    JsonRpcError { code: i32, message: String },
-    #[error("Request timeout")]
-    Timeout,
-    // We'll add more variants as we encounter new error cases
+pub enum PingError { // Custom error type for core logic 
+    #[error("Request failed: {0}")] 
+    RequestError(#[from] reqwest::Error),
+    #[error("JSON-RPC error: {0}")]
+    JsonRpcError(String),
 }
 
-/// Convenience type alias for functions that can return our custom error type
-pub type Result<T> = std::result::Result<T, ChainPingError>;
+type PingAttemptResult = Result<(Duration, String), PingError>;
 
-/// Pings a given Ethereum JSON-RPC endpoint and returns a structured result
-pub async fn ping_endpoint(url: &str) -> PingResult {
-    let endpoint = url.to_string();
-    
-    let client = reqwest::Client::new();
-    let request_payload = JsonRpcRequest {
-        jsonrpc: "2.0".to_string(),
-        method: "eth_blockNumber".to_string(),
-        params: Vec::new(),
-        id: 1,
-    };
 
-    let start_time = std::time::Instant::now();
+// --- CORE LOGIC ---
+/// Pings an endpoint ONCE and returns its latency and block number, or an error
+async fn ping_once(client: &reqwest::Client, url: &str) -> PingAttemptResult {
+    let request_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    });
 
-    // We'll handle the entire request in a match to capture different error types
-    let result = client
+    let start = Instant::now();
+
+    let response = client
         .post(url)
         .json(&request_payload)
         .send()
-        .await;
+        .await
+        .map_err(PingError::RequestError)?; // Convert reqwest error into our custom error
 
-    let latency = start_time.elapsed().as_millis();
+    let latency = start.elapsed();
 
-    match result {
-        Ok(response) => {
-            // We got an HTTP response, now parse the JSON
-            match response.json::<JsonRpcResponse>().await {
-                Ok(json_response) => {
-                    if let Some(error) = json_response.error {
-                        // JSON-RPC level error
-                        PingResult {
-                            endpoint,
-                            latency_ms: Some(latency),
-                            status: PingStatus::JsonRpcError,
-                            block_number: None,
-                            error_message: Some(format!("JSON-RPC error: {} (code: {})", error.message, error.code)),
-                            min_latency_ms: None,
-                            max_latency_ms: None,
-                            ping_count: 1,
-                            success_rate: 0.0,
-                        }
-                    } else {
-                        // Success case - we have a block number!
-                        PingResult {
-                            endpoint,
-                            latency_ms: Some(latency),
-                            status: PingStatus::Success,
-                            block_number: json_response.result,
-                            error_message: None,
-                            min_latency_ms: None,
-                            max_latency_ms: None,
-                            ping_count: 1,
-                            success_rate: 1.0,
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Failed to parse JSON
-                    PingResult {
-                        endpoint,
-                        latency_ms: Some(latency),
-                        status: PingStatus::HttpError,
-                        block_number: None,
-                        error_message: Some(format!("Failed to parse response: {}", e)),
-                        min_latency_ms: None,
-                        max_latency_ms: None,
-                        ping_count: 1,
-                        success_rate: 0.0,
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            // HTTP request failed entirely
-            PingResult {
-                endpoint,
-                latency_ms: None, // No latency measurement if request never completed
-                status: PingStatus::HttpError,
-                block_number: None,
-                error_message: Some(format!("HTTP request failed: {}", e)),
-                min_latency_ms: None,
-                max_latency_ms: None,
-                ping_count: 1,
-                success_rate: 0.0,
-            }
-        }
+    if !response.status().is_success() {
+        return Err(PingError::RequestError(response.error_for_status().unwrap_err()));
+    }
+
+    let json_response: serde_json::Value = response.json().await.map_err(PingError::RequestError)?;
+    
+    if let Some(error) = json_response.get("error") {
+        return Err(PingError::JsonRpcError(error.to_string()));
+    }
+    
+    if let Some(result) = json_response.get("result") {
+        // We have a success! Return the latency and the block number string.
+        Ok((latency, result.to_string()))
+    } else {
+        Err(PingError::JsonRpcError("Missing 'result' field in response".to_string()))
     }
 }
 
-/// Pings an endpoint multiple times and returns aggregated statistics
-pub async fn ping_endpoint_multiple(url: &str, count: usize) -> PingResult {
+/// The "smart" function. Pings an endpoint multiple times and aggregates the results.
+pub async fn ping_endpoint_multiple(url: &str, count: usize, timeout_secs: u64) -> PingResult {
+    let client =  match reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+
+        {
+            Ok(c) => c,
+            Err(e) => {
+                // If we can't even build the client, the entire process has failed.
+                // We return a failure PingResult immediately.
+                return PingResult {
+                    endpoint: url.to_string(),
+                    status: PingStatus::Failure,
+                    error_message: Some(format!("Failed to build HTTP client: {}", e)),
+                    // ... all other fields are None or 0 ...
+                    avg_latency_ms: None,
+                    min_latency_ms: None,
+                    max_latency_ms: None,
+                    block_number: None,
+                    ping_count: count,
+                    success_count: 0,
+                };
+            }
+        }; 
+
     let mut latencies = Vec::new();
-    let mut http_successes = 0;
-    let mut rpc_successes = 0;
+    let mut successes = 0;
     let mut last_block_number = None;
     let mut last_error_message = None;
 
     for _ in 0..count {
-        let single_result = ping_endpoint(url).await;
-
-        // Count HTTP successes and collect latency if we got a measurement
-        if let Some(latency) = single_result.latency_ms {
-        http_successes += 1;
-        latencies.push(latency);
-        }
-
-        // Count RPC successes and track last good block
-        match single_result.status {
-            PingStatus::Success => {
-                rpc_successes += 1;
-                last_block_number = single_result.block_number;
-                last_error_message = None;
-        } 
-            _ => { // Any failure case
-                last_error_message = single_result.error_message;
+        match ping_once(&client, url).await {
+            Ok((latency, block_number)) => {
+                successes += 1;
+                latencies.push(latency.as_millis());
+                last_block_number = Some(block_number);
+            }
+            Err(e) => {
+                if let PingError::RequestError(ref req_err) = e {
+                    if req_err.is_timeout() {
+                        last_error_message = Some("Request timed out".to_string());
+                    } else if req_err.is_connect() {
+                        last_error_message = Some("Connection failed".to_string());
+                    } else if let Some(status) = req_err.status() {
+                        last_error_message = Some(format!("HTTP Error: {}", status));
+                    } else {
+                        last_error_message = Some(e.to_string());
+                    }
+                } else {
+                    last_error_message = Some(e.to_string());
+                }
             }
         }
     }
 
-    let avg_latency = if !latencies.is_empty() {
-        Some(latencies.iter().sum::<u128>() / latencies.len() as u128)
-    } else {
-        None
-    };
-    
-    let min_latency = latencies.iter().min().copied();
-    let max_latency = latencies.iter().max().copied();
-
-     // Determine overall status
-    let status = if rpc_successes == count {
+    let status = if successes == count {
         PingStatus::Success
-    } else if rpc_successes > 0 {
+    } else if successes > 0 {
         PingStatus::PartialSuccess
-    } else if http_successes == 0 {
-        PingStatus::HttpError
     } else {
-        PingStatus::JsonRpcError
+        PingStatus::Failure
     };
 
     PingResult {
         endpoint: url.to_string(),
-        latency_ms: avg_latency,
-        status,
+        avg_latency_ms: if !latencies.is_empty() { Some(latencies.iter().sum::<u128>() / latencies.len() as u128) } else { None },
+        min_latency_ms: latencies.iter().min().copied(),
+        max_latency_ms: latencies.iter().max().copied(),
         block_number: last_block_number,
-        error_message: last_error_message,
-        min_latency_ms: min_latency,
-        max_latency_ms: max_latency,
         ping_count: count,
-        success_rate: if count > 0 { rpc_successes as f32 / count as f32 } else { 0.0 },
+        success_count: successes,
+        status,
+        error_message: last_error_message,
     }
 }
