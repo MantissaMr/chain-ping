@@ -2,7 +2,7 @@
 use clap::Parser;
 use chain_ping::{ping_endpoint_multiple, PingStatus, PingResult};
 use futures::future::join_all;
-use comfy_table::{Table, presets::UTF8_FULL, modifiers::UTF8_ROUND_CORNERS};
+use comfy_table::{Table, presets::UTF8_FULL, modifiers::UTF8_ROUND_CORNERS, Color, Cell};
 
 /// This struct defines our CLI arguments using clap's derive feature
 #[derive(Parser)]
@@ -15,7 +15,7 @@ struct Cli {
     # [arg(short, long, default_value = "4")]
     pings: usize,
 
-    /// Request timeout in seconds (default: 10)
+    /// Timeout limit for each individual request in seconds (default: 10)
     #[arg(short, long, default_value = "10")]
     timeout: u64,
 
@@ -84,11 +84,14 @@ fn output_table(results: &[PingResult]) {
         } else {
             result.endpoint.clone()
         };
-        let status = match result.status {
-            PingStatus::Success => "SUCCESS",
-            PingStatus::PartialSuccess => "PARTIAL SUCCESS",
-            PingStatus::Failure => "FAILURE",
+
+        // Color Logic: We create a Cell and apply the color directly to it.
+        let status_cell = match result.status {
+            PingStatus::Success => Cell::new("SUCCESS").fg(Color::Green),
+            PingStatus::PartialSuccess => Cell::new("PARTIAL").fg(Color::Yellow),
+            PingStatus::Failure => Cell::new("FAILURE").fg(Color::Red),
         };
+
         let error_display = if error.len() > 40 {
             format!("{}...", &error[..37])
         } else {
@@ -102,23 +105,23 @@ fn output_table(results: &[PingResult]) {
             let max_latency = result.max_latency_ms.map(|ms| format!("{}ms", ms)).unwrap_or_else(|| "-".to_string());
             
             table.add_row(vec![
-                &endpoint_display, 
-                status,
-                &latency_value,
-                &min_latency,
-                &max_latency,
-                &success_count,
-                block,
-                &error_display
+                Cell::new(&endpoint_display),
+                status_cell,
+                Cell::new(&latency_value),
+                Cell::new(&min_latency),
+                Cell::new(&max_latency),
+                Cell::new(&success_count),
+                Cell::new(block),
+                Cell::new(&error_display),
             ]);
         } else {
             // Single ping mode: No Min, Max, and Success. And display Latency (instead if Avg Latency)
             table.add_row(vec![
-                &endpoint_display,
-                status, 
-                &latency_value, 
-                block,
-                &error_display
+                Cell::new(&endpoint_display),
+                status_cell,
+                Cell::new(&latency_value),
+                Cell::new(block),
+                Cell::new(&error_display),
             ]);
         }
     }

@@ -80,30 +80,28 @@ async fn ping_once(client: &reqwest::Client, url: &str) -> PingAttemptResult {
 }
 
 /// The "smart" function. Pings an endpoint multiple times and aggregates the results.
-pub async fn ping_endpoint_multiple(url: &str, count: usize, timeout_secs: u64) -> PingResult {
+pub async fn ping_endpoint_multiple(url: &str, count: usize, timeout_secs: u64) -> PingResult {    
     let client =  match reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()
-
-        {
-            Ok(c) => c,
-            Err(e) => {
-                // If we can't even build the client, the entire process has failed.
-                // We return a failure PingResult immediately.
-                return PingResult {
-                    endpoint: url.to_string(),
-                    status: PingStatus::Failure,
-                    error_message: Some(format!("Failed to build HTTP client: {}", e)),
-                    // ... all other fields are None or 0 ...
-                    avg_latency_ms: None,
-                    min_latency_ms: None,
-                    max_latency_ms: None,
-                    block_number: None,
-                    ping_count: count,
-                    success_count: 0,
-                };
-            }
-        }; 
+    .timeout(Duration::from_secs(timeout_secs))
+    .build() {
+        Ok(c) => c,
+        Err(e) => {
+            // If we can't even build the client, the entire process has failed.
+            // We return a failure PingResult immediately.
+            return PingResult {
+                endpoint: url.to_string(),
+                status: PingStatus::Failure,
+                error_message: Some(format!("Failed to build HTTP client: {}", e)),
+                // ... all other fields are None or 0 ...
+                avg_latency_ms: None,
+                min_latency_ms: None,
+                max_latency_ms: None,
+                block_number: None,
+                ping_count: count,
+                success_count: 0,
+            };
+        }
+    }; 
 
     let mut latencies = Vec::new();
     let mut successes = 0;
