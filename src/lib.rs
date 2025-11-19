@@ -79,7 +79,7 @@ async fn ping_once(client: &reqwest::Client, url: &str) -> PingAttemptResult {
     }
 }
 
-/// The "smart" function. Pings an endpoint multiple times and aggregates the results.
+/// Pings an endpoint multiple times and aggregates the results
 pub async fn ping_endpoint_multiple(url: &str, count: usize, timeout_secs: u64) -> PingResult {    
     let client =  match reqwest::Client::builder()
     .timeout(Duration::from_secs(timeout_secs))
@@ -140,16 +140,53 @@ pub async fn ping_endpoint_multiple(url: &str, count: usize, timeout_secs: u64) 
     } else {
         PingStatus::Failure
     };
+    
+    let (avg, min, max) = calculate_stats(&latencies);
 
     PingResult {
-        endpoint: url.to_string(),
-        avg_latency_ms: if !latencies.is_empty() { Some(latencies.iter().sum::<u128>() / latencies.len() as u128) } else { None },
-        min_latency_ms: latencies.iter().min().copied(),
-        max_latency_ms: latencies.iter().max().copied(),
+        endpoint: url.to_string(),        
+        avg_latency_ms: avg,
+        min_latency_ms: min,
+        max_latency_ms: max,
         block_number: last_block_number,
         ping_count: count,
         success_count: successes,
         status,
         error_message: last_error_message,
+    }
+}
+
+fn calculate_stats(latencies: &[u128]) -> (Option<u128>, Option<u128>, Option<u128>) {
+    if latencies.is_empty() {
+        return (None, None, None);
+    }
+    let sum: u128 = latencies.iter().sum();
+    let avg = sum / latencies.len() as u128;
+    let min = latencies.iter().min().copied();
+    let max = latencies.iter().max().copied();
+    (Some(avg), min, max)
+}
+
+// --- TESTS ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_stats() {
+        let data = vec![100, 200, 300];
+        let (avg, min, max) = calculate_stats(&data);
+        assert_eq!(avg, Some(200));
+        assert_eq!(min, Some(100));
+        assert_eq!(max, Some(300));
+    }
+
+    #[test]
+    fn test_calculate_stats_empty() {
+        let data = vec![];
+        let (avg, min, max) = calculate_stats(&data);
+        assert_eq!(avg, None);
+        assert_eq!(min, None);
+        assert_eq!(max, None);
     }
 }
