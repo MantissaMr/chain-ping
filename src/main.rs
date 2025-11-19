@@ -4,22 +4,22 @@ use chain_ping::{ping_endpoint_multiple, PingStatus, PingResult};
 use futures::future::join_all;
 use comfy_table::{Table, presets::UTF8_FULL, modifiers::UTF8_ROUND_CORNERS, Color, Cell};
 
-/// This struct defines our CLI arguments using clap's derive feature
+/// A high-performance CLI tool for benchmarking Ethereum RPC endpoints.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     /// Ethereum RPC endpoint URLs (one or more)
     endpoints: Vec<String>,
 
-    /// Number of pints to perform per endpoint (default: 4)
+    /// Number of pints to perform per endpoint
     # [arg(short, long, default_value = "4")]
     pings: usize,
 
-    /// Timeout limit for each individual request in seconds (default: 10)
+    /// Timeout limit for each individual request in seconds
     #[arg(short, long, default_value = "10")]
     timeout: u64,
 
-    /// Output format: table or json (default: table)
+    /// Output format: table or json 
     #[arg(short, long, default_value = "table")]
     format: String,
 }
@@ -32,7 +32,7 @@ async fn main() {
     
     if cli.endpoints.is_empty() {
         eprintln!("Error: At least one endpoint URL is required");
-        return;
+        std::process::exit(1);
     }
 
     let endpoint_str = if cli.endpoints.len() == 1 { "endpoint" } else { "endpoints" };
