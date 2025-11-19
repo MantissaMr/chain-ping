@@ -12,7 +12,7 @@ struct Cli {
     endpoints: Vec<String>,
 
     /// Number of pints to perform per endpoint
-    # [arg(short, long, default_value = "4")]
+    #[arg(short, long, default_value = "4")]
     pings: usize,
 
     /// Timeout limit for each individual request in seconds
@@ -64,7 +64,7 @@ fn output_table(results: &[PingResult]) {
         .load_preset(UTF8_FULL)
         .apply_modifier(UTF8_ROUND_CORNERS);
 
-    let multiple_pings = results.get(0).map_or(false, |r| r.ping_count > 1);
+    let multiple_pings = results.first().is_some_and(|r| r.ping_count > 1);
 
     if multiple_pings {
         // Mode A: Multiple Pings. We show "Avg Latency", "Min", and "Max".

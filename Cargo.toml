@@ -2,6 +2,11 @@
 name = "chain-ping"
 version = "0.1.0"
 edition = "2024"
+description = "A high-performance CLI tool for benchmarking Ethereum RPC endpoints."
+license = "MIT"
+repository = "https://github.com/MantissaMr/chain-ping" 
+keywords = ["ethereum", "rpc", "benchmark", "cli", "web3"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }

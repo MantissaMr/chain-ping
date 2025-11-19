@@ -22,7 +22,7 @@ pub struct PingResult {
 }
 
 /// A simple summary of the outcome
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Copy, Clone)]
 pub enum PingStatus {
     Success,
     PartialSuccess,
